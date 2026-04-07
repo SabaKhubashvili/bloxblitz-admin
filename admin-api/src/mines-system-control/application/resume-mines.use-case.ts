@@ -1,0 +1,22 @@
+import { Injectable, Logger } from '@nestjs/common';
+import {
+  MinesSystemMode,
+  type MinesSystemStatePayload,
+} from '../domain/mines-system-state';
+import { MinesSystemStateRedisService } from '../infrastructure/mines-system-state.redis.service';
+
+@Injectable()
+export class ResumeMinesUseCase {
+  private readonly log = new Logger(ResumeMinesUseCase.name);
+
+  constructor(
+    private readonly minesSystemState: MinesSystemStateRedisService,
+  ) {}
+
+  async execute(): Promise<MinesSystemStatePayload> {
+    const next: MinesSystemStatePayload = { mode: MinesSystemMode.ACTIVE };
+    const saved = await this.minesSystemState.write(next);
+    this.log.log('[AUDIT] mines.system.resume mode=ACTIVE');
+    return saved;
+  }
+}

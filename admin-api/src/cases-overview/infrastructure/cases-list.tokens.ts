@@ -1,0 +1,1 @@
+export const CASES_LIST_REPOSITORY = Symbol('CASES_LIST_REPOSITORY');

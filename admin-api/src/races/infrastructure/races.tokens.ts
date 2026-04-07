@@ -1,0 +1,1 @@
+export const RACES_REPOSITORY = Symbol('RACES_REPOSITORY');

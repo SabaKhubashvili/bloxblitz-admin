@@ -1,0 +1,60 @@
+# --- Environment & secrets (never commit) ---
+.env
+.env.*
+!.env.example
+!.env*.example
+.env.prod
+.env.dev
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+secrets/
+
+# --- Dependencies ---
+node_modules/
+**/node_modules/
+
+# --- Builds & caches ---
+dist/
+build/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# --- Test & coverage ---
+coverage/
+.nyc_output/
+
+# --- Logs & debug ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# --- Tooling ---
+.eslintcache
+.prettiercache
+
+# --- IDE & OS ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# --- Deploy (optional local links) ---
+.vercel
+
+# --- TLS (do not commit private keys) ---
+nginx/certs/*.pem
+nginx/certs/*.key

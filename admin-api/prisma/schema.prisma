@@ -1,0 +1,1543 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String    @id @default(uuid())
+  username        String    @unique
+  rblx_id         String    @unique
+  profile_picture String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  role            UserRoles @default(MEMBER)
+  client_seed     String
+  last_login_ip   String?
+  last_login_at   DateTime?
+
+  /// Most recent client IP seen from activity tracking (throttled API touches) or login.
+  last_known_ip String? @db.VarChar(64)
+  /// Truncated User-Agent from last login (avoid oversized rows).
+  last_user_agent String? @db.VarChar(512)
+  /// Normalised device class at last login: desktop | mobile | tablet | unknown
+  last_device String? @db.VarChar(32)
+
+  /// Geo hints from edge headers when available (e.g. CF-IPCountry). Not PII-grade precision.
+  geo_country   String? @db.VarChar(8)
+  geo_city      String? @db.VarChar(120)
+  geo_timezone  String? @db.VarChar(64)
+
+  last_active_at DateTime?
+  login_count    Int       @default(0)
+
+  /// Last N unique IPs (application caps length ~10). Minimise long-term raw IP retention per policy.
+  ip_history      String[] @default([])
+  device_history  String[] @default([])
+
+  device_fingerprint String? @db.VarChar(128)
+  is_vpn             Boolean?
+  is_proxy           Boolean?
+
+  referedBy          String?
+  referralLastUpdate DateTime?
+
+  balance Decimal @default(0) @db.Decimal(10, 2)
+
+  totalXP      Int     @default(0)
+  currentLevel Int     @default(1)
+  xpMultiplier Decimal @default(1.0) @db.Decimal(5, 2)
+
+  userStatisticsId Int? @unique
+
+  ampGiveawayWins    AmpGiveaway[]      @relation("AmpGiveawayWinner")
+  ampGiveawayEntries AmpGiveawayEntry[]
+
+  kinguinCodesRedeemed  KinguinPromoCode[]     @relation("KinguinCodeRedemptions")
+  kinguinRedemptionLogs KinguinRedemptionLog[] @relation("KinguinRedemptions")
+  userReferral          Referral?              @relation("user_referral")
+  referralUsageLogs     ReferralLog[]
+
+  seedRotationHistory SeedRotationHistory[] @relation("SeedRotationHistory")
+
+  referedByUser              Referral?               @relation("user_refered_by", fields: [referedBy], references: [referralCode])
+  userGameStats              UserGameStatistics[]    @relation("UserGameStats")
+  inventory                  UserInventoryAmp[]
+  userSeed                   UserSeed?               @relation("UserSeed")
+  statistics                 UserStatistics?         @relation("UserStatisticsUser")
+  settings                   UserSettings?           @relation("UserSettings")
+  verifications              UserVerification[]
+  receivedTipTransactions    TipTransaction[]        @relation("TipTransactionRecipient")
+  sentTipTransactions        TipTransaction[]        @relation("TipTransactionSender")
+  balanceTipTransactions     BalanceTipTransaction[] @relation("TipTransactionRecipient")
+  sentBalanceTipTransactions BalanceTipTransaction[] @relation("TipTransactionSender")
+  userDepositAddresses       UserDepositAddress[]
+  transactionHistory         TransactionHistory[]
+  xpEvents                   XpEvent[]
+  rakeback                   UserRakeback?           @relation("UserRakeback")
+
+  gameHistory GameHistory[]
+
+  crashPlayerControl     CrashPlayerControl?
+  coinflipPlayerControl  CoinflipPlayerControl?
+  minesPlayerControl     MinesPlayerControl?
+  dicePlayerControl      DicePlayerControl?
+  crashBetHistory    CrashBet[]        @relation("CrashBets")
+  minesBetHistory MinesBetHistory[]
+  diceBetHistory  DiceBet[]
+
+  dailySpinHistory DailySpinHistory[] @relation("DailySpinHistory")
+  dailySpinState   DailySpinState?    @relation("DailySpinState")
+
+  raceParticipants RaceParticipant[]
+
+  caseOpenHistory CaseOpenHistory[]
+
+  userRewardKeys          UserKey[]
+  rewardCaseOpens         RewardCaseOpen[]
+  rewardMilestoneProgress RewardCaseMilestoneProgress[]
+
+  @@index([username, rblx_id])
+  @@index([totalXP(sort: Desc)])
+  @@index([currentLevel(sort: Desc)])
+}
+
+/// Internal staff accounts for admin/back-office (credentials separate from game `User`).
+model StaffMember {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  /// Store a password hash only (e.g. bcrypt/argon2), never plaintext.
+  password        String
+  first_name      String
+  last_name       String
+  phone_number    String?
+  profile_picture String?
+  role            UserRoles @default(SUPPORT)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  two_factor_challenges StaffTwoFactorChallenge[]
+
+  @@index([email])
+  @@index([role])
+}
+
+/// Time-limited email (or future TOTP) step-up challenge after password validation.
+model StaffTwoFactorChallenge {
+  id                String    @id @default(uuid())
+  staff_member_id   String
+  code_hash         String
+  expires_at DateTime
+  failed_attempts   Int       @default(0)
+  consumed_at       DateTime?
+  last_code_sent_at DateTime  @default(now())
+  /// EMAIL now; e.g. TOTP when extending to authenticator apps.
+  delivery_method   String    @default("EMAIL")
+  created_at        DateTime  @default(now())
+
+  staff StaffMember @relation(fields: [staff_member_id], references: [id], onDelete: Cascade)
+
+  @@index([staff_member_id])
+  @@index([expires_at])
+}
+
+/// Append-only log of sensitive admin actions against game users (staff JWT `sub` + email).
+model AdminAuditLog {
+  id                   String   @id @default(uuid())
+  createdAt            DateTime @default(now())
+  staffId              String   @db.VarChar(64)
+  staffEmail           String   @db.VarChar(320)
+  action               String   @db.VarChar(80)
+  targetUserUsername   String?  @db.VarChar(255)
+  targetUserId         String?  @db.VarChar(64)
+  payload              Json?
+
+  @@index([createdAt(sort: Desc)])
+  @@index([targetUserUsername])
+  @@index([action])
+}
+
+model UserSettings {
+  id             String  @id @default(uuid())
+  userUsername   String  @unique
+  // Privacy Settings
+  privateProfile Boolean @default(false)
+  showStatistics Boolean @default(true)
+  // Preference Settings
+  soundEffects   Boolean @default(true)
+  soundVolume    Int     @default(70)
+  animations     Boolean @default(true)
+  language       String  @default("en")
+  timezone       String  @default("UTC")
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation("UserSettings", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+}
+
+model UserStatistics {
+  id                Int       @id @default(autoincrement())
+  userUsername      String    @unique
+  // Overall Statistics
+  totalWagered      Decimal   @default(0) @db.Decimal(12, 2)
+  totalWageredMm2   Decimal   @default(0) @db.Decimal(12, 2)
+  totalDeposits     Decimal   @default(0) @db.Decimal(12, 2)
+  totalWithdrawals  Decimal   @default(0) @db.Decimal(12, 2)
+  totalProfit       Decimal   @default(0) @db.Decimal(12, 2)
+  totalLoss         Decimal   @default(0) @db.Decimal(12, 2)
+  netProfit         Decimal   @default(0) @db.Decimal(12, 2)
+  // Game Statistics
+  totalGamesPlayed  Int       @default(0)
+  totalGamesWon     Int       @default(0)
+  totalGamesLost    Int       @default(0)
+  coinflipsWon      Int       @default(0)
+  coinflipsLost     Int       @default(0)
+  crashGamesPlayed  Int       @default(0)
+  minesGamesPlayed  Int       @default(0)
+  // Win Statistics
+  biggestWin        Decimal   @default(0) @db.Decimal(12, 2)
+  biggestWinGame    String?
+  biggestWinDate    DateTime?
+  biggestMultiplier Decimal   @default(0) @db.Decimal(10, 4)
+  highestCrashPoint Decimal   @default(0) @db.Decimal(10, 4)
+
+  // Engagement Statistics
+  giveawaysEntered      Int     @default(0)
+  giveawaysWon          Int     @default(0)
+  tipsReceived          Int     @default(0)
+  tipsSent              Int     @default(0)
+  totalTipValueReceived Decimal @default(0) @db.Decimal(10, 2)
+  totalTipValueSent     Decimal @default(0) @db.Decimal(10, 2)
+
+  // Metadata
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  user       User     @relation("UserStatisticsUser", fields: [userUsername], references: [username])
+
+  @@index([userUsername])
+  @@index([totalWagered(sort: Desc)])
+  @@index([totalWageredMm2(sort: Desc)])
+  @@index([netProfit(sort: Desc)])
+  @@index([biggestWin(sort: Desc)])
+}
+
+model UserRakeback {
+  id           String  @id @default(uuid())
+  userUsername String  @unique
+
+  // ─── Anti-abuse: loss-based rakeback (only bets ≥ MIN_RAKEBACK_BET) ───
+  eligibleWager           Decimal @default(0) @db.Decimal(14, 2)
+  eligibleWon             Decimal @default(0) @db.Decimal(14, 2)
+  rakebackAccrualUtcDay   String? // yyyy-mm-dd UTC; resets daily cap counter
+  rakebackAccrualDayTotal Decimal @default(0) @db.Decimal(14, 2)
+
+  // ─── Accrued (unclaimable, accumulates from wagers in real-time) ───
+  dailyAccrued   Decimal @default(0) @db.Decimal(12, 2)
+  weeklyAccrued  Decimal @default(0) @db.Decimal(12, 2)
+  monthlyAccrued Decimal @default(0) @db.Decimal(12, 2)
+
+  // ─── Claimable (moved from accrued at unlock window, stacks if missed) ───
+  dailyClaimable   Decimal @default(0) @db.Decimal(12, 2)
+  weeklyClaimable  Decimal @default(0) @db.Decimal(12, 2)
+  monthlyClaimable Decimal @default(0) @db.Decimal(12, 2)
+
+  // ─── Unlock / expiry windows ───
+  dailyUnlocksAt   DateTime? // 24h after first-ever claim; resets each claim
+  weeklyUnlocksAt  DateTime? // Saturday 17:00 UTC
+  weeklyExpiresAt  DateTime? // Sunday  17:00 UTC
+  monthlyUnlocksAt DateTime? // 1st of month 17:00 UTC
+  monthlyExpiresAt DateTime? // 2nd of month 17:00 UTC
+
+  // ─── Last claim timestamps ───
+  lastDailyClaim   DateTime?
+  lastWeeklyClaim  DateTime?
+  lastMonthlyClaim DateTime?
+
+  // ─── Daily streak ───
+  dailyStreak            Int      @default(0)
+  dailyLongestStreak     Int      @default(0)
+  dailyLastStreakDate     DateTime?
+  dailyStreakMultiplier   Decimal  @default(0.05) @db.Decimal(5, 4) // 5% → 100% over 20 days
+
+  // ─── Weekly streak ───
+  weeklyStreak           Int      @default(0)
+  weeklyLongestStreak    Int      @default(0)
+  weeklyLastStreakDate   DateTime?
+  weeklyStreakMultiplier Decimal  @default(0.05) @db.Decimal(5, 4)
+
+  // ─── Monthly streak ───
+  monthlyStreak          Int      @default(0)
+  monthlyLongestStreak   Int      @default(0)
+  monthlyLastStreakDate  DateTime?
+  monthlyStreakMultiplier Decimal @default(0.05) @db.Decimal(5, 4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User               @relation("UserRakeback", fields: [userUsername], references: [username], onDelete: Cascade)
+  claimLogs RakebackClaimLog[]
+
+  @@index([userUsername])
+}
+
+model RakebackClaimLog {
+  id             String       @id @default(uuid())
+  userUsername   String
+  type           RakebackType
+
+  amountClaimed  Decimal      @db.Decimal(12, 2)
+
+  // Streak snapshot at time of claim
+  streakDay      Int          // e.g. 3 = 3rd consecutive claim
+  streakBonus    Decimal      @db.Decimal(5, 4) // multiplier applied e.g. 0.15
+  streakReset    Boolean      @default(false)   // true if streak was broken before this claim
+
+  balanceBefore  Decimal      @db.Decimal(12, 2)
+  balanceAfter   Decimal      @db.Decimal(12, 2)
+  claimedAt      DateTime     @default(now())
+
+  userRakeback   UserRakeback @relation(fields: [userUsername], references: [userUsername], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([type, claimedAt(sort: Desc)])
+}
+
+enum RakebackType {
+  DAILY
+  WEEKLY
+  MONTHLY
+} 
+
+model XpEvent {
+  id           String   @id @default(uuid())
+  userUsername String
+  amount       Int
+  source       XpSource // GAME_WIN, DAILY_LOGIN, REFERRAL, etc.
+  referenceId  String? // gameId, etc.
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername, createdAt(sort: Desc)])
+}
+
+enum XpSource {
+  GAME_WIN
+  GAME_LOSE
+  DAILY_LOGIN
+  REFERRAL_WAGER
+  STREAK_BONUS
+  PROMO
+}
+
+model ipBans {
+  id           Int       @id @default(autoincrement())
+  ip_address   String
+  banned_until DateTime?
+  reason       String
+  created_at   DateTime  @default(now())
+
+  @@index([ip_address])
+}
+
+model UserVerification {
+  id           Int      @id @default(autoincrement())
+  userUsername String
+  description  String
+  key          String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([key])
+}
+
+model UserInventoryAmp {
+  id             Int                    @id @default(autoincrement())
+  userUsername   String
+  petId          Int
+  state          UserInventoryItemState
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  petInGameId    String
+  value          Float
+  petVariant     Variant[]
+  owner_bot_id   Int
+  botTradeStatus BotTradeStatus
+  Bot            AmpBot                 @relation(fields: [owner_bot_id], references: [id], onDelete: Cascade)
+  pet            pets                   @relation(fields: [petId], references: [id])
+  user           User                   @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([petId])
+  @@index([state])
+  @@index([owner_bot_id])
+  @@index([userUsername, id])
+  @@index([id, userUsername])
+  @@map("UserInventory")
+}
+
+model pets {
+  id                Int                @id @default(autoincrement())
+  name              String
+  image             String
+  rarity            String
+  type              String
+  rvalue            Float
+  nvalue            Float
+  mvalue            Float
+  rvalue_nopotion   Float
+  rvalue_ride       Float
+  rvalue_fly        Float
+  rvalue_flyride    Float
+  nvalue_nopotion   Float
+  nvalue_ride       Float
+  nvalue_fly        Float
+  nvalue_flyride    Float
+  mvalue_nopotion   Float
+  mvalue_ride       Float
+  mvalue_fly        Float
+  mvalue_flyride    Float
+  category_d        String
+  category_n        String
+  category_m        String
+  category_preppy_d Boolean            @default(false)
+  category_preppy_n Boolean            @default(false)
+  category_preppy_m Boolean            @default(false)
+  is_flyride        Boolean            @default(false)
+  score             Int                @default(0)
+  created_at        DateTime           @default(now())
+  updated_at        DateTime
+  inGameName        String?
+  giveaways         AmpGiveaway[]
+  inventory         UserInventoryAmp[]
+  caseItems         CaseItem[]
+  rewardCaseItems RewardCaseItem[]
+
+  @@index([name])
+  @@index([rarity])
+  @@index([type])
+  @@index([score(sort: Desc)])
+  @@index([name], map: "idx_pets_name")
+}
+
+model AmpBot {
+  id                  Int                @id @default(autoincrement())
+  name                String
+  rblx_id             String             @unique
+  private_server_link String
+  profile_picture     String
+  created_at          DateTime           @default(now())
+  updated_at          DateTime           @default(now())
+  active              Boolean
+  banned              Boolean            @default(false)
+  can_join            Boolean            @default(true)
+  UserInventory       UserInventoryAmp[]
+
+  @@index([name])
+  @@index([active])
+  @@index([rblx_id])
+  @@map("Bot")
+}
+
+model Referral {
+  id                     String        @id @default(uuid())
+  userUsername           String        @unique
+  referralCode           String        @unique
+  isActive               Boolean       @default(true)
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  lastActivity           DateTime?
+  lastClaim              DateTime?
+  totalGenerated         Decimal       @default(0) @db.Decimal(10, 2)
+  totalClaimed           Decimal       @default(0) @db.Decimal(10, 2)
+  claimableAmount        Decimal       @default(0) @db.Decimal(10, 2)
+  pendingAmount          Decimal       @default(0) @db.Decimal(10, 2)
+  monthlyLimit           Decimal?      @db.Decimal(10, 2)
+  lifetimeLimit          Decimal?      @default(5000.00) @db.Decimal(10, 2)
+  minimumClaim           Decimal       @default(10.00) @db.Decimal(10, 2)
+  commissionRate         Decimal       @default(0.02) @db.Decimal(5, 4)
+  bonusMultiplier        Decimal       @default(1.0) @db.Decimal(3, 2)
+  tier                   Int           @default(1)
+  clickCount             Int           @default(0)
+  conversionCount        Int           @default(0)
+  conversionRate         Decimal       @default(0) @db.Decimal(5, 4)
+  lastReferralCodeChange DateTime?
+  ownerUser              User          @relation("user_referral", fields: [userUsername], references: [username], onDelete: Cascade)
+  referralLogs           ReferralLog[]
+  referredUsers          User[]        @relation("user_refered_by")
+
+  @@index([userUsername])
+  @@index([referralCode])
+}
+
+model ReferralLog {
+  id               String   @id @default(uuid())
+  referredUsername String
+  game             String
+  amount           Decimal  @default(0) @db.Decimal(10, 2)
+  referrerCode     String
+  createdAt        DateTime @default(now())
+  referralMm2Id    String?
+  referredUser     User     @relation(fields: [referredUsername], references: [username], onDelete: Cascade)
+  referrer         Referral @relation(fields: [referrerCode], references: [referralCode], onDelete: Cascade)
+
+  @@index([referrerCode])
+}
+
+model TipTransaction {
+  id                String   @id @default(cuid())
+  senderUsername    String
+  recipientUsername String
+  itemIds           String[]
+  totalValue        Decimal  @db.Decimal(10, 2)
+  itemCount         Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  recipient         User     @relation("TipTransactionRecipient", fields: [recipientUsername], references: [username])
+  sender            User     @relation("TipTransactionSender", fields: [senderUsername], references: [username])
+
+  @@map("tip_transactions")
+}
+
+model BalanceTipTransaction {
+  id                String   @id @default(cuid())
+  senderUsername    String
+  recipientUsername String
+  amount            Decimal  @db.Decimal(10, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  recipient User @relation("TipTransactionRecipient", fields: [recipientUsername], references: [username])
+  sender    User @relation("TipTransactionSender", fields: [senderUsername], references: [username])
+}
+
+model AmpGiveaway {
+  id                 Int                @id @default(autoincrement())
+  minWager           Int                @default(0)
+  endDate            DateTime
+  petId              Int
+  value              Int
+  Variant            Variant[]
+  winnerUsername     String?
+  isActive           Boolean            @default(true)
+  created_at         DateTime           @default(now())
+  updated_at         DateTime           @default(now()) @updatedAt
+  pet                pets               @relation(fields: [petId], references: [id])
+  winner             User?              @relation("AmpGiveawayWinner", fields: [winnerUsername], references: [username])
+  ampGiveawayEntries AmpGiveawayEntry[]
+
+  @@index([id])
+  @@index([endDate])
+  @@index([endDate, isActive])
+}
+
+model AmpGiveawayEntry {
+  id           Int         @id @default(autoincrement())
+  giveawayId   Int
+  userUsername String
+  created_at   DateTime    @default(now())
+  giveaway     AmpGiveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
+  user         User        @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([giveawayId])
+  @@index([userUsername])
+}
+
+model KinguinPromoCode {
+  id             String                @id @default(uuid())
+  code           String                @unique
+  value          Decimal               @db.Decimal(10, 2)
+  isRedeemed     Boolean               @default(false)
+  redeemedBy     String?
+  redeemedAt     DateTime?
+  expiresAt      DateTime?
+  batchId        String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  status         KinguinCodeStatus     @default(UNUSED)
+  redeemedByUser User?                 @relation("KinguinCodeRedemptions", fields: [redeemedBy], references: [username])
+  redemptionLog  KinguinRedemptionLog?
+
+  @@index([code])
+  @@index([isRedeemed])
+  @@index([redeemedBy])
+  @@index([batchId])
+}
+
+model KinguinRedemptionLog {
+  id            String           @id @default(uuid())
+  codeId        String           @unique
+  userUsername  String
+  ipAddress     String?
+  userAgent     String?
+  creditsBefore Decimal          @db.Decimal(10, 2)
+  creditsAfter  Decimal          @db.Decimal(10, 2)
+  creditAmount  Decimal          @db.Decimal(10, 2)
+  redeemedAt    DateTime         @default(now())
+  code          KinguinPromoCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  user          User             @relation("KinguinRedemptions", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([redeemedAt])
+}
+
+model KinguinCodeBatch {
+  id            String   @id @default(uuid())
+  batchName     String
+  purchaseDate  DateTime
+  totalCodes    Int
+  totalValue    Decimal  @db.Decimal(10, 2)
+  codesRedeemed Int      @default(0)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([batchName])
+  @@index([purchaseDate])
+}
+
+model HashChain {
+  id              String       @id @default(uuid())
+  finalHash       String       @db.VarChar(64)
+  clientSeed      String?      @db.VarChar(64)
+  clientSeedSetAt DateTime?
+  isActive        Boolean      @default(true)
+  chainId         String       @unique
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  currentRound    Int          @default(0)
+  gameType        GameType
+  isComplete      Boolean      @default(false)
+  serverSeed      String       @db.VarChar(128)
+  totalRounds     Int          @default(1000000)
+  crashRounds     CrashRound[]
+
+  @@unique([gameType, chainId])
+  @@index([gameType, isActive])
+  @@index([gameType, currentRound])
+}
+
+model CrashRound {
+  id           String   @id @default(uuid())
+  chainId      String
+  roundNumber  Int
+  gameHash     String   @unique @db.VarChar(64)
+  crashPoint   Decimal  @db.Decimal(10, 4)
+  clientSeed   String   @db.VarChar(64)
+  totalBets    Int      @default(0)
+  totalWagered Decimal  @default(0) @db.Decimal(12, 2)
+  totalPayout  Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt    DateTime @default(now())
+
+  finished   Boolean   @default(false)
+  finishedAt DateTime?
+
+  chain HashChain @relation(fields: [chainId], references: [chainId], onDelete: Cascade)
+
+  @@unique([chainId, roundNumber])
+  @@index([chainId, roundNumber(sort: Desc)])
+  @@index([gameHash])
+  @@index([createdAt(sort: Desc)])
+}
+
+model UserSeed {
+  id                   String                @id @default(uuid())
+  userUsername         String                @unique
+  activeServerSeed     String                @db.VarChar(128)
+  activeServerSeedHash String                @db.VarChar(64)
+  activeClientSeed     String                @db.VarChar(64)
+  nextServerSeed       String                @db.VarChar(128)
+  nextServerSeedHash   String                @db.VarChar(64)
+  seedCreatedAt        DateTime              @default(now())
+  seedRotatedAt        DateTime?
+  lastUsedAt           DateTime              @default(now())
+  maxGamesPerSeed      Int                   @default(10000)
+  totalGamesPlayed     Int                   @default(0)
+  seedHistory          SeedRotationHistory[]
+  user                 User                  @relation("UserSeed", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+}
+
+model GameHistory {
+  id       String   @id @default(uuid())
+  gameType GameType
+  username String
+
+  status GameStatus
+
+  betAmount  Decimal  @db.Decimal(12, 2)
+  profit     Decimal? @db.Decimal(12, 2)
+  multiplier Decimal? @db.Decimal(10, 4)
+
+  seedRotationHistoryId String?
+  seedRotationHistory   SeedRotationHistory? @relation(fields: [seedRotationHistoryId], references: [id])
+  createdAt             DateTime             @default(now())
+
+  minesBetHistory     MinesBetHistory?
+  crashBetHistory     CrashBet?
+  coinflipGameHistory CoinflipGameHistory?
+  diceBetHistory      DiceBet?
+  caseOpenHistory     CaseOpenHistory?
+
+  User User @relation(fields: [username], references: [username], onDelete: Cascade)
+
+  @@index([gameType])
+  @@index([createdAt])
+  @@index([gameType, createdAt])
+  @@index([seedRotationHistoryId])
+}
+
+model CoinflipGameHistory {
+  id     Int    @id @default(autoincrement())
+  gameId String @unique
+
+  player1Username String
+  player2Username String
+
+  winnerSide  Side
+  player1Side Side
+
+  fairness OnlinePlayerFairness? @relation(fields: [gameId], references: [gameId], onDelete: Cascade, map: "CoinflipGameHistory_fairness_fkey")
+
+  parentHistory GameHistory? @relation(fields: [gameId], references: [id], onDelete: Cascade, map: "CoinflipGameHistory_parentHistory_fkey")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([player1Username])
+  @@index([player2Username])
+}
+
+model CrashBet {
+  id      String @id @default(uuid())
+  roundId String
+  gameId  String @unique
+
+  userUsername String
+
+  cashoutAt   Decimal? @db.Decimal(10, 4)
+  autoCashout Decimal? @db.Decimal(10, 4)
+  didCashout  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  user User @relation("CrashBets", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  parentHistory GameHistory? @relation(fields: [gameId], references: [id], onDelete: Cascade, map: "CrashBet_parentHistory_fkey")
+
+  @@index([roundId])
+  @@index([userUsername, createdAt(sort: Desc)])
+}
+
+/// Admin moderation for Crash only (ban / bet caps / rate limits). Game services should read this when accepting Crash bets.
+model CrashPlayerControl {
+  userUsername String @id
+
+  status CrashPlayerControlStatus @default(ACTIVE)
+
+  /// Max stake per single Crash bet (currency units). Null = no cap from moderation.
+  maxBetAmount Decimal? @db.Decimal(12, 2)
+  /// Minimum seconds since the player’s last Crash bet. Null = no cooldown from moderation.
+  minSecondsBetweenBets Int?
+
+  note String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([status])
+}
+
+enum CoinflipPlayerControlStatus {
+  ACTIVE
+  LIMITED
+  BANNED
+}
+
+/// Admin moderation for Coinflip (persisted; ban list is also synced to `coinflip:config:banned_users` for WS).
+model CoinflipPlayerControl {
+  userUsername String @id
+
+  status CoinflipPlayerControlStatus @default(ACTIVE)
+
+  /// Max wager per coinflip (currency units). Null = no cap from this moderation row.
+  maxWagerAmount Decimal? @db.Decimal(12, 2)
+
+  /// Optional cap on completed coinflip games per rolling hour (enforcement in game services when wired).
+  maxGamesPerHour Int?
+
+  note String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([status])
+}
+
+enum MinesPlayerControlStatus {
+  ACTIVE
+  LIMITED
+  BANNED
+}
+
+/// Admin moderation for Mines (canonical in DB; game API reads Redis `mines:control:{username}` only).
+model MinesPlayerControl {
+  userUsername String @id
+
+  status MinesPlayerControlStatus @default(ACTIVE)
+
+  /// Max stake per Mines game from moderation (currency units). Null = no per-game cap from this row.
+  maxBetAmount Decimal? @db.Decimal(12, 2)
+
+  /// Rolling-hour cap on completed Mines rounds (enforced in game API via Redis).
+  maxGamesPerHour Int?
+
+  note String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([status])
+  @@index([userUsername])
+}
+
+enum DicePlayerControlStatus {
+  ACTIVE
+  LIMITED
+  BANNED
+}
+
+/// Admin moderation for Dice (canonical in DB; game API reads Redis `dice:control:{username}` only).
+model DicePlayerControl {
+  userUsername String @id
+
+  status DicePlayerControlStatus @default(ACTIVE)
+
+  /// Max stake per dice roll from moderation (currency units). Only meaningful when LIMITED.
+  maxBetAmount Decimal? @db.Decimal(12, 2)
+
+  note String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([status])
+}
+
+model MinesBetHistory {
+  id           String @id @default(uuid())
+  gameId       String @unique
+  userUsername String
+
+  // Game config
+  gridSize   Int
+  minesCount Int
+
+  nonce Int
+
+  // Game Data
+  revealedTiles Int[]
+  minePositions Int[]
+  cashoutTile   Int?
+  minesHit      Int?
+
+  //  Finance Data
+  status GameStatus @default(PLAYING)
+
+  createdAt DateTime @default(now())
+
+  parentHistory GameHistory? @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user          User         @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([createdAt(sort: Desc)])
+  @@index([gameId])
+}
+
+model DiceBet {
+  id             String   @id @default(uuid())
+  userUsername   String
+  betAmount      Decimal  @db.Decimal(12, 2)
+  chance         Decimal  @db.Decimal(5, 2)
+  rollMode       DiceRollMode
+  rollResult     Decimal  @db.Decimal(5, 2)
+  multiplier     Decimal  @db.Decimal(10, 4)
+  payout         Decimal  @db.Decimal(12, 2)
+  profit         Decimal  @db.Decimal(12, 2)
+  clientSeed     String   @db.VarChar(64)
+  serverSeedHash String   @db.VarChar(64)
+  nonce          Int
+  createdAt      DateTime @default(now())
+
+  user          User          @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+  parentHistory GameHistory?  @relation(fields: [gameHistoryId], references: [id], onDelete: Cascade)
+  gameHistoryId String?       @unique
+
+  @@index([userUsername])
+  @@index([createdAt(sort: Desc)])
+  @@index([userUsername, createdAt(sort: Desc)])
+  @@index([betAmount])
+}
+
+enum DiceRollMode {
+  OVER
+  UNDER
+}
+
+model OnlinePlayerFairness {
+  id             String   @id @default(uuid())
+  gameId         String   @unique
+  gameType       GameType
+  serverSeed     String   @db.VarChar(128)
+  serverSeedHash String   @db.VarChar(64)
+  eosBlockNumber Int
+  eosBlockId     String
+  nonce          Int
+  result         String
+  createdAt      DateTime @default(now())
+
+  coinflipGameHistory CoinflipGameHistory?
+
+  @@index([gameType])
+  @@index([serverSeedHash])
+}
+
+model SeedRotationHistory {
+  id               String           @id @default(uuid())
+  userUsername     String
+  serverSeed       String           @db.VarChar(128)
+  serverSeedHash   String           @db.VarChar(64)
+  clientSeed       String           @db.VarChar(64)
+  totalGamesPlayed Int
+  seedActivatedAt  DateTime
+  seedRotatedAt    DateTime         @default(now())
+  rotationType     SeedRotationType
+  rotationReason   String?
+  userSeedId       String?
+  firstNonce       Int
+  lastNonce        Int
+  gameHistory       GameHistory[]
+  caseOpenHistory   CaseOpenHistory[]
+  userSeed          UserSeed?        @relation(fields: [userSeedId], references: [id])
+  user              User             @relation("SeedRotationHistory", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([userUsername, seedRotatedAt(sort: Desc)])
+  @@index([serverSeedHash])
+}
+
+model UserGameStatistics {
+  id                String    @id @default(uuid())
+  userUsername      String
+  totalGames        Int       @default(0)
+  totalWagered      Decimal   @default(0) @db.Decimal(12, 2)
+  totalPayout       Decimal   @default(0) @db.Decimal(12, 2)
+  totalProfit       Decimal   @default(0) @db.Decimal(12, 2)
+  gamesWon          Int       @default(0)
+  gamesLost         Int       @default(0)
+  gamesCashedOut    Int       @default(0)
+  biggestWin        Decimal   @default(0) @db.Decimal(10, 2)
+  biggestLoss       Decimal   @default(0) @db.Decimal(10, 2)
+  highestMultiplier Decimal   @default(0) @db.Decimal(10, 4)
+  longestWinStreak  Int       @default(0)
+  longestLossStreak Int       @default(0)
+  currentStreak     Int       @default(0)
+  firstGameAt       DateTime?
+  lastGameAt        DateTime?
+  updatedAt         DateTime  @updatedAt
+  gameType          GameType
+  user              User      @relation("UserGameStats", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@unique([userUsername, gameType])
+  @@index([userUsername])
+  @@index([gameType])
+  @@index([totalProfit(sort: Desc)])
+  @@index([totalWagered(sort: Desc)])
+}
+
+model UserDepositAddress {
+  id           String           @id @default(uuid())
+  userUsername String
+  coin         AvailableCryptos
+  kind         String
+  profileId    String
+  address      String           @unique
+  createdAt    DateTime         @default(now())
+  lastUsedAt   DateTime         @default(now())
+  isActive     Boolean          @default(true)
+  invoiceId    String?
+  usedAmount   Decimal?         @db.Decimal(12, 2)
+  notes        String?
+
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@unique([userUsername, coin])
+  @@index([address])
+  @@index([userUsername])
+  @@index([coin])
+}
+
+model CryptoTransaction {
+  id String @id @default(uuid())
+
+  providerTransactionId String  @unique
+  invoiceId             String?
+
+  txid String
+
+  username String?
+
+  // Currency
+  currency         AvailableCryptos
+  network          String
+  usdAmountPaid    Decimal          @default(0) @db.Decimal(36, 18)
+  cryptoAmountPaid Decimal          @db.Decimal(36, 18)
+  coinAmountPaid   Decimal          @db.Decimal(12, 2)
+
+  // Confirmation tracking
+  minConfirmations Int     @default(2)
+  confirmations    Int     @default(0)
+  isFullyConfirmed Boolean @default(false)
+
+  // Status
+  status TransactionStatus @default(PENDING)
+
+  // Metadata
+  passthrough Json?
+  riskLevel   String?
+  rawCallback Json?
+
+  // Timestamps
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  confirmedAt DateTime?
+}
+
+model TransactionHistory {
+  id String @id @default(uuid())
+
+  // User
+  userUsername String
+  user         User   @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  // Transaction type and direction
+  category  TransactionCategory
+  direction TransactionDirection
+
+  provider PaymentProviders @default(KINGUIN)
+
+  status TransactionStatus @default(COMPLETED)
+
+  // Value
+  usdAmountPaid    Decimal @default(0) @db.Decimal(36, 18)
+  cryptoAmountPaid Decimal @db.Decimal(36, 18)
+  coinAmountPaid   Decimal @db.Decimal(12, 2)
+  balanceAfter     Decimal @db.Decimal(12, 2)
+
+  // Asset details
+  assetType   AssetType
+  assetSymbol String?
+
+  // Reference to source
+  referenceType ReferenceType
+  referenceId   String
+
+  // Optional metadata for flexibility
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  // Single-column indexes retained for lookups by those fields alone
+  @@index([userUsername])
+  @@index([category])
+  @@index([referenceId])
+  @@index([createdAt])
+  // Composite index: covers the common paginated history query
+  // WHERE userUsername = ? ORDER BY createdAt DESC
+  @@index([userUsername, createdAt(sort: Desc)])
+  // Composite indexes for filtered queries
+  @@index([userUsername, category])
+  @@index([userUsername, direction])
+}
+
+enum PaymentProviders {
+  KINGUIN
+  UNIWIRE
+  INGAME
+}
+
+enum TransactionCategory {
+  CRYPTO
+  KINGUIN_REDEEM
+  PET
+  REFUND
+}
+
+enum AssetType {
+  CRYPTO
+  GIFT_CARD
+  ITEM
+}
+
+enum ReferenceType {
+  CRYPTO_TRANSACTION
+  KINGUIN_CODE
+  INVENTORY_ITEM
+  GAME_HISTORY
+  TIP_TRANSACTION
+}
+
+enum TransactionDirection {
+  IN
+  OUT
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum AvailableCryptos {
+  BTC
+  ETH
+  LTC
+  USDT
+  DOGE
+}
+
+enum GameType {
+  CRASH
+  MINES
+  COINFLIP
+  JACKPOT
+  DICE
+  CASE
+}
+
+enum CrashPlayerControlStatus {
+  ACTIVE
+  LIMITED
+  BANNED
+}
+
+enum GameStatus {
+  FINISHED
+  INITIALIZING
+  ENDING
+  WON
+  LOST
+  CASHED_OUT
+  CANCELLED
+  PLAYING
+}
+
+enum SeedRotationType {
+  MANUAL
+  AUTOMATIC
+  CLIENT_SEED_CHANGE
+  SYSTEM
+  ADMIN
+}
+
+enum KinguinCodeStatus {
+  UNUSED
+  REDEEMED
+  EXPIRED
+  DISABLED
+}
+
+enum ReferralClaimLogStatus {
+  SUCCESS
+  PENDING
+  FAILED
+  CANCELED
+}
+
+enum Side {
+  H
+  T
+}
+
+enum UserInventoryItemState {
+  WITHDRAWING
+  IDLE
+  BATTLING
+  LOCKED
+}
+
+enum Variant {
+  M
+  N
+  F
+  R
+}
+
+enum UserRewardKeySource {
+  WAGER
+  LEVEL_UP
+  MILESTONE_RAKEBACK
+  CASE_OPEN_SPEND
+  XP_MILESTONE
+  ADMIN_ADJUSTMENT
+}
+
+/// Case listing / UX grouping (separate from numeric `Case.riskLevel`).
+enum CaseVariant {
+  FEATURED
+  STANDARD
+  HIGH_RISK
+}
+
+/// Product catalog split (e.g. Adopt Me vs Murder Mystery 2 cases).
+enum CaseCatalogCategory {
+  AMP
+  MM2
+}
+
+enum UserRoles {
+  ADMIN
+  MODERATOR
+  SUPPORT
+  MEMBER
+  OWNER
+  COMMUNITY_MANAGER
+  WHALE
+  BIGFLIPPER
+}
+
+enum BotTradeStatus {
+  NONE
+  WITHDRAW_ACCEPTED
+}
+
+// ─── Game economy (theoretical house edge / RTP for analytics & cached game API reads) ─
+
+/// Versioned target economics per product slice. Realized profit still comes from `GameHistory`.
+/// Lookup active row: `effectiveTo` null, latest `effectiveFrom` for (`gameType`, optional `caseId`, optional `variantKey`).
+/// DICE uses one row per period (same theoretical edge for OVER and UNDER).
+model GameEconomyConfig {
+  id           String        @id @default(uuid())
+  gameType     GameType
+  /// When set, `gameType` should be CASE — edge for that case listing only.
+  caseId       String?
+  /// Optional app-defined slice when edge varies inside one `gameType` (e.g. Mines `5x5-3`, Crash curve `v2`, jackpot fee tier). Leave null for a single global edge per game.
+  variantKey   String?
+
+  /// Long-run fraction of stake the model retains (e.g. 0.04 = 4%). Theoretical RTP ≈ 1 − houseEdge.
+  houseEdge Decimal @db.Decimal(10, 8)
+
+  effectiveFrom DateTime  @default(now())
+  /// Null means still active until superseded; set end timestamp when replacing with a newer config.
+  effectiveTo   DateTime?
+
+  notes    String?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case? @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([gameType, effectiveFrom(sort: Desc)])
+  @@index([gameType, caseId, variantKey, effectiveFrom(sort: Desc)])
+  @@index([gameType, effectiveTo, effectiveFrom(sort: Desc)])
+  @@index([caseId])
+  @@map("game_economy_configs")
+}
+
+// ─── Cases (loot boxes) ─────────────────────────────────────────────────────────
+
+model Case {
+  id        String      @id @default(uuid())
+  slug      String      @unique
+  name      String
+  imageUrl  String?
+  price     Decimal     @db.Decimal(12, 2)
+  variant   CaseVariant @default(STANDARD)
+  catalogCategory CaseCatalogCategory @default(AMP)
+  /// Continuous risk 0–100 (e.g. 22 = low; higher = riskier). Map to 4 bands in application logic.
+  riskLevel Decimal     @default(0) @db.Decimal(5, 2)
+  isActive  Boolean     @default(true)
+  sortOrder Int         @default(0)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  items CaseItem[]
+  opens CaseOpenHistory[]
+  economyConfigs GameEconomyConfig[]
+
+  @@index([isActive, sortOrder])
+  @@index([slug])
+  @@index([variant])
+  @@index([catalogCategory])
+  @@map("cases")
+}
+
+/// Weighted pool entry: roll maps to cumulative weights using provably fair `normalizedRoll` on CaseOpenHistory.
+model CaseItem {
+  id        String @id @default(uuid())
+  caseId    String
+  petId     Int
+  weight    Int
+  sortOrder Int    @default(0)
+  variant   Variant[] @default([])
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  pet  pets @relation(fields: [petId], references: [id])
+
+  wins CaseOpenHistory[]
+
+  @@index([caseId])
+  @@index([petId])
+  @@map("case_items")
+}
+
+model CaseOpenHistory {
+  id             String  @id @default(uuid())
+  userUsername   String
+  caseId         String
+  wonCaseItemId  String
+  /// Which row when opening multiple cases in one action (0-based).
+  openBatchIndex Int     @default(0)
+
+  pricePaid Decimal @db.Decimal(12, 2)
+  wonItemValue Decimal @db.Decimal(12, 2) @default(0)
+
+  // Provably fair (same shape as DiceBet / user seed nonce chain)
+  clientSeed       String  @db.VarChar(64)
+  serverSeedHash   String  @db.VarChar(64)
+  nonce            Int
+  /// Deterministic value in [0, 1) from seeds + nonce; pick item by cumulative weight.
+  normalizedRoll   Decimal @db.Decimal(24, 8)
+  /// Populated after server seed rotation / reveal so users can verify past opens.
+  serverSeed       String? @db.VarChar(128)
+
+  seedRotationHistoryId String?
+  seedRotationHistory   SeedRotationHistory? @relation(fields: [seedRotationHistoryId], references: [id])
+  gameHistoryId         String?              @unique
+  parentHistory         GameHistory?         @relation(fields: [gameHistoryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  user    User     @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+  case    Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  wonItem CaseItem @relation(fields: [wonCaseItemId], references: [id], onDelete: Restrict)
+
+  @@index([userUsername])
+  @@index([caseId])
+  @@index([caseId, createdAt])
+  @@index([createdAt(sort: Desc)])
+  @@index([userUsername, createdAt(sort: Desc)])
+  @@index([serverSeedHash])
+  @@map("case_open_history")
+}
+
+// ─── Daily Spin ───────────────────────────────────────────────────────────────
+
+model DailySpinHistory {
+  id           String   @id @default(uuid())
+  userUsername String
+  prizeTier    Int
+  prizeAmount  Decimal  @db.Decimal(12, 2)
+  prizeLabel   String
+  createdAt    DateTime @default(now())
+
+  user User @relation("DailySpinHistory", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([createdAt(sort: Desc)])
+  @@index([userUsername, createdAt(sort: Desc)])
+}
+
+model DailySpinState {
+  id           String   @id @default(uuid())
+  userUsername String   @unique
+  lastSpinAt   DateTime
+  nextSpinAt   DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation("DailySpinState", fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@index([userUsername])
+  @@index([nextSpinAt])
+}
+
+// ─── Wagering race (leaderboard) ─────────────────────────────────────────────
+
+enum RaceStatus {
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  FINISHED
+  CANCELLED
+}
+
+model Race {
+  id             String     @id @default(uuid())
+  startTime      DateTime
+  endTime        DateTime
+  status         RaceStatus @default(SCHEDULED)
+  /// When true, race window may still run but leaderboard credits are frozen (wagers ignored).
+  trackingPaused Boolean    @default(false)
+  /// "24h" | "7d" | "custom" — informational for admin UI.
+  raceWindow     String?
+
+  /// Optional denormalized total of `RaceReward.rewardAmount` for the race (1–10).
+  totalPrizePool Decimal?   @db.Decimal(14, 2)
+
+  participants RaceParticipant[]
+  rewards      RaceReward[]
+
+  @@index([status, endTime(sort: Desc)])
+  @@index([status, startTime(sort: Desc)])
+}
+
+model RaceParticipant {
+  id            String   @id @default(uuid())
+  raceId        String
+  userUsername  String
+  wageredAmount Decimal  @default(0) @db.Decimal(14, 2)
+  /// Tie-break: earlier `updatedAt` wins when `wageredAmount` ties. Managed in application layer (not @updatedAt).
+  updatedAt     DateTime @default(now())
+  /// Populated when the race finishes — avoids recounting for historical rank.
+  finalRank     Int?
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+
+  @@unique([raceId, userUsername])
+  @@index([raceId, wageredAmount(sort: Desc), updatedAt(sort: Asc)])
+  @@index([userUsername])
+}
+
+/// Prize schedule for positions 1–10 (same rows used for active display and finished history).
+model RaceReward {
+  id           String  @id @default(uuid())
+  raceId       String
+  position     Int
+  rewardAmount Decimal @db.Decimal(14, 2)
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@unique([raceId, position])
+  @@index([raceId])
+}
+
+// ─── Level / milestone “reward” cases (separate from shop `Case`) ─────────────
+
+model RewardCaseDefinition {
+  id             String   @id @default(uuid())
+  slug           String   @unique
+  position       Int
+  imageUrl       String
+  title          String
+  isRakebackCase Boolean  @default(false)
+  milestoneLevel Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  isActive             Boolean @default(true)
+  receivesWagerKeys    Boolean @default(false)
+  wagerCoinsPerKey     Int     @default(100)
+  wagerKeysMaxPerEvent Int     @default(10)
+  levelUpKeysOverride  Int?
+
+  /// Minimum user level required to unlock (open) this case. 0 = no restriction.
+  requiredLevel Int @default(0)
+
+  /// XP needed per milestone key grant (null = feature disabled).
+  xpMilestoneThreshold      Int?
+  /// Maximum keys granted per single XP-milestone event (caps burst from large bets). Default 10.
+  xpMilestoneMaxKeysPerEvent Int @default(10)
+
+  poolItems         RewardCaseItem[]
+  userKeyEntries    UserKey[]
+  rewardOpens       RewardCaseOpen[]
+  milestoneProgress RewardCaseMilestoneProgress[]
+
+  @@index([position])
+  @@map("reward_case_definitions")
+}
+
+model RewardCaseItem {
+  id           String    @id @default(uuid())
+  rewardCaseId String
+  petId        Int
+  weight       Int
+  sortOrder    Int       @default(0)
+  variant      Variant[] @default([])
+
+  case RewardCaseDefinition @relation(fields: [rewardCaseId], references: [id], onDelete: Cascade)
+  pet  pets                  @relation(fields: [petId], references: [id])
+
+  @@index([rewardCaseId])
+  @@index([petId])
+  @@map("reward_case_items")
+}
+
+model UserKey {
+  id           String              @id @default(uuid())
+  userUsername String
+  rewardCaseId String
+  quantity     Int
+  source       UserRewardKeySource
+  referenceId  String?
+  createdAt    DateTime            @default(now())
+
+  user User                 @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+  case RewardCaseDefinition @relation(fields: [rewardCaseId], references: [id], onDelete: Restrict)
+
+  @@index([userUsername, rewardCaseId])
+  @@index([userUsername, createdAt(sort: Desc)])
+  @@map("user_keys")
+}
+
+model RewardCaseOpen {
+  id           String   @id @default(uuid())
+  userUsername String
+  rewardCaseId String
+  itemsReceived Json
+  createdAt    DateTime @default(now())
+
+  user User                 @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+  case RewardCaseDefinition @relation(fields: [rewardCaseId], references: [id], onDelete: Restrict)
+
+  @@index([userUsername, rewardCaseId, createdAt(sort: Desc)])
+  @@map("reward_cases")
+}
+
+/// Tracks how many XP-milestone keys have already been granted per user per case.
+model RewardCaseMilestoneProgress {
+  id           String   @id @default(uuid())
+  userUsername String
+  rewardCaseId String
+  keysGranted  Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  user User                 @relation(fields: [userUsername], references: [username], onDelete: Cascade)
+  case RewardCaseDefinition @relation(fields: [rewardCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([userUsername, rewardCaseId])
+  @@index([userUsername])
+  @@map("reward_case_milestone_progress")
+}
