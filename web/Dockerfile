@@ -49,8 +49,10 @@ WORKDIR /app
 ARG NEXT_PUBLIC_ADMIN_API_URL=/api
 ENV NEXT_PUBLIC_ADMIN_API_URL=${NEXT_PUBLIC_ADMIN_API_URL}
 
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+# `npm ci` omits devDependencies when NODE_ENV=production, but next.config.ts needs
+# @svgr/webpack (and other devDeps) at build time — install full tree here.
+ENV NODE_ENV=development
 
 COPY web/package.json web/package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -59,6 +61,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/ .
 COPY admin-api/prisma ./prisma
 
+ENV NODE_ENV=production
 RUN node scripts/sync-prisma.mjs && npm run build --ignore-scripts
 
 # -----------------------------------------------------------------------------
