@@ -13,6 +13,9 @@ services:
       - .env.prod
     environment:
       PORT: ${ADMIN_API_PORT:-4005}
+    volumes:
+      # Optional: Postgres CA PEM (default path /app/certs/db_cert/db_cert.crt — see DATABASE_SSL_CA_PATH)
+      - ./certs/db_cert:/app/certs/db_cert:ro
     networks:
       - app
 
