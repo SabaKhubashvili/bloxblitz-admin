@@ -23,7 +23,7 @@ export class PrismaService
       connectionTimeoutMillis: 5000,
       ssl: {
         rejectUnauthorized: true,
-        ca: fs.readFileSync('certs/db_cert/db_cert.crt').toString(),
+        ca: fs.readFileSync('/app/certs/db_cert/db_cert.crt').toString(),
       },
     });
 
