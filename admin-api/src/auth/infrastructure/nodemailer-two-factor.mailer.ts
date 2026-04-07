@@ -106,14 +106,9 @@ export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
       );
       return;
     }
-    this.logger.log(`Sending login code to email: ${toEmail}`);
-
-    this.logger.log(`Subject: ${subject}`);
-    this.logger.log(`Brand name: ${brandName}`);
-    this.logger.log(`TTL: ${ttlMs}ms`);
-    this.logger.log(`Minutes valid: ${minutesValid}`);
-    this.logger.log(`Text: ${text}`);
-    this.logger.log(`HTML: ${html}`);
+    this.logger.log(
+      `Sending 2FA email via SMTP ${host}:${Number(this.config.get('SMTP_PORT')) || 587} to ${toEmail}`,
+    );
 
     const port = Number(this.config.get('SMTP_PORT')) || 587;
     const secure =
@@ -121,14 +116,20 @@ export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
     const user = this.config.get<string>('SMTP_USER') ?? '';
     const pass = this.config.get<string>('SMTP_PASS') ?? '';
 
+    const connectionTimeout =
+      Number(this.config.get('SMTP_CONNECTION_TIMEOUT_MS')) || 15_000;
+    const socketTimeout =
+      Number(this.config.get('SMTP_SOCKET_TIMEOUT_MS')) || 30_000;
+
     const transporter = nodemailer.createTransport({
       host,
       port,
       secure,
       auth: user ? { user, pass } : undefined,
+      connectionTimeout,
+      greetingTimeout: connectionTimeout,
+      socketTimeout,
     });
-
-    this.logger.log(`Transporter created`);
 
     await transporter.sendMail({
       from,
@@ -138,11 +139,6 @@ export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
       html,
     });
 
-    this.logger.log(`Email sent`);
-    this.logger.log(`From: ${from}`);
-    this.logger.log(`To: ${toEmail}`);
-    this.logger.log(`Subject: ${subject}`);
-    this.logger.log(`Text: ${text}`);
-    this.logger.log(`HTML: ${html}`);
+    this.logger.log(`2FA email sent to ${toEmail}`);
   }
 }
