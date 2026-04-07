@@ -12,12 +12,11 @@ import * as fs from 'fs';
 import { makeRetryExtension } from './extensions/retryPrisma.extension';
 
 /**
- * TLS for pg when using a custom CA (e.g. DigitalOcean managed Postgres).
- * - Set `DATABASE_SSL_CA_PATH` to a PEM file inside the container, or rely on the
- *   default path below and mount `./certs/db_cert` in Compose (see docker-compose.prod.yml).
- * - If no CA file exists, uses Node default trust store (`rejectUnauthorized: true`) when
- *   the URL implies SSL (`sslmode=require`, etc.) or `DATABASE_SSL=true`.
- * - `DATABASE_SSL=false` disables passing explicit SSL options (non-TLS local DB).
+ * TLS for pg (e.g. DigitalOcean managed Postgres uses a CA not in Node's default store).
+ * - Mount your provider's CA PEM at `DATABASE_SSL_CA_PATH` (default `/app/certs/db_cert/db_cert.crt`).
+ * - If you see "self-signed certificate in certificate chain", you need that CA file, or set
+ *   `DATABASE_SSL_REJECT_UNAUTHORIZED=false` (weaker; dev/staging only).
+ * - `DATABASE_SSL=false` or `sslmode=disable` disables explicit SSL options (local DB).
  */
 function pgSslOptions(): ConnectionOptions | undefined {
   const url = process.env.DATABASE_URL ?? '';
@@ -50,6 +49,20 @@ function pgSslOptions(): ConnectionOptions | undefined {
   };
 }
 
+/** Avoid pg-connection-string applying its own sslmode/TLS on top of our `ssl` object (conflicts / P1011). */
+function stripSslQueryParamsFromDatabaseUrl(connectionString: string): string {
+  try {
+    const u = new URL(connectionString);
+    u.searchParams.delete('sslmode');
+    u.searchParams.delete('sslrootcert');
+    u.searchParams.delete('sslcert');
+    u.searchParams.delete('sslkey');
+    return u.toString();
+  } catch {
+    return connectionString;
+  }
+}
+
 @Injectable()
 export class PrismaService
   extends PrismaClient
@@ -59,8 +72,13 @@ export class PrismaService
 
   constructor() {
     const ssl = pgSslOptions();
+    let connectionString = process.env.DATABASE_URL!;
+    if (ssl !== undefined) {
+      connectionString = stripSslQueryParamsFromDatabaseUrl(connectionString);
+    }
+
     const adapter = new PrismaPg({
-      connectionString: process.env.DATABASE_URL!,
+      connectionString,
       connectionTimeoutMillis: 5000,
       ...(ssl !== undefined ? { ssl } : {}),
     });
@@ -70,6 +88,14 @@ export class PrismaService
 
       log: ['query', 'error', 'warn'],
     });
+
+    if (ssl !== undefined && !('ca' in ssl) && ssl.rejectUnauthorized !== false) {
+      this.logger.warn(
+        'Postgres TLS: no CA file at DATABASE_SSL_CA_PATH — using default trust store. ' +
+          'If queries fail with "self-signed certificate in certificate chain", add your provider CA PEM ' +
+          '(e.g. DigitalOcean) or set DATABASE_SSL_REJECT_UNAUTHORIZED=false (not recommended for production).',
+      );
+    }
   }
 
   async onModuleInit() {
