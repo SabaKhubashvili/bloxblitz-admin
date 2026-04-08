@@ -1,3 +1,4 @@
+import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -28,7 +29,7 @@ import {
 } from './infrastructure/auth.tokens';
 import { JwtTokenIssuer } from './infrastructure/jwt-token.issuer';
 import { NestAuthAttemptLogger } from './infrastructure/nest-auth-attempt.logger';
-import { NodemailerTwoFactorMailer } from './infrastructure/nodemailer-two-factor.mailer';
+import { BrevoApiTwoFactorMailer } from './infrastructure/brevo-api-two-factor.mailer';
 import { PrismaStaffAuthRepository } from './infrastructure/prisma-staff-auth.repository';
 import { PrismaTwoFactorChallengeRepository } from './infrastructure/prisma-two-factor-challenge.repository';
 import { SecureSixDigitCodeGenerator } from './infrastructure/secure-six-digit-code.generator';
@@ -45,6 +46,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 @Module({
   imports: [
     ConfigModule,
+    HttpModule,
     PrismaModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
@@ -68,7 +70,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
     SecureSixDigitCodeGenerator,
     JwtTokenIssuer,
     NestAuthAttemptLogger,
-    NodemailerTwoFactorMailer,
+    BrevoApiTwoFactorMailer,
     { provide: STAFF_AUTH_REPOSITORY, useExisting: PrismaStaffAuthRepository },
     {
       provide: TWO_FACTOR_CHALLENGE_REPOSITORY,
@@ -82,7 +84,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
     },
     { provide: TOKEN_ISSUER, useExisting: JwtTokenIssuer },
     { provide: AUTH_ATTEMPT_LOGGER, useExisting: NestAuthAttemptLogger },
-    { provide: TWO_FACTOR_MAILER, useExisting: NodemailerTwoFactorMailer },
+    { provide: TWO_FACTOR_MAILER, useExisting: BrevoApiTwoFactorMailer },
     {
       provide: LoginUseCase,
       useFactory: (

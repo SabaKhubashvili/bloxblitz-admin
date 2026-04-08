@@ -1,11 +1,11 @@
+import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import type SMTPTransport from 'nodemailer/lib/smtp-transport';
+import type { AxiosError } from 'axios';
+import { firstValueFrom } from 'rxjs';
 import type { ITwoFactorMailer } from '../domain/two-factor-mailer';
 
-/** Brevo (Sendinblue) relay — use SMTP key from https://app.brevo.com/settings/keys/smtp */
-const BREVO_DEFAULT_HOST = 'smtp-relay.brevo.com';
+const BREVO_TRANSACTIONAL_EMAIL_URL = 'https://api.brevo.com/v3/smtp/email';
 
 function escapeHtml(s: string): string {
   return s
@@ -75,78 +75,31 @@ function buildTwoFactorEmailHtml(
 </html>`;
 }
 
-/**
- * Build Nodemailer options for Brevo SMTP (TLS).
- * - Port 587: STARTTLS (secure: false, requireTLS: true)
- * - Port 465: implicit TLS (secure: true)
- * Prefers BREVO_SMTP_*; falls back to legacy SMTP_* for local/dev.
- */
-function brevoSmtpTransportOptions(config: ConfigService): SMTPTransport.Options {
-  const host =
-    config.get<string>('BREVO_SMTP_HOST')?.trim() ||
-    config.get<string>('SMTP_HOST')?.trim() ||
-    BREVO_DEFAULT_HOST;
-
-  const portRaw =
-    config.get<string>('BREVO_SMTP_PORT')?.trim() ||
-    config.get<string>('SMTP_PORT')?.trim();
-  const port = portRaw ? Number(portRaw) : 587;
-
-  const user =
-    config.get<string>('BREVO_SMTP_USER')?.trim() ||
-    config.get<string>('SMTP_USER')?.trim() ||
-    '';
-  const pass =
-    config.get<string>('BREVO_SMTP_PASS')?.trim() ||
-    config.get<string>('SMTP_PASS')?.trim() ||
-    '';
-
-  const secureExplicit = config.get<string>('BREVO_SMTP_SECURE') ?? config.get<string>('SMTP_SECURE');
-  const secure =
-    secureExplicit === 'true' || (!secureExplicit && port === 465);
-
-  const connectionTimeout =
-    Number(config.get('SMTP_CONNECTION_TIMEOUT_MS')) || 15_000;
-  const socketTimeout =
-    Number(config.get('SMTP_SOCKET_TIMEOUT_MS')) || 30_000;
-
-  return {
-    host,
-    port,
-    secure,
-    auth: user ? { user, pass } : undefined,
-    requireTLS: !secure && port === 587,
-    tls: {
-      rejectUnauthorized: true,
-      minVersion: 'TLSv1.2',
-    },
-    connectionTimeout,
-    greetingTimeout: connectionTimeout,
-    socketTimeout,
-  };
+interface BrevoSendEmailResponse {
+  messageId?: string;
 }
 
 @Injectable()
-export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
-  private readonly logger = new Logger(NodemailerTwoFactorMailer.name);
+export class BrevoApiTwoFactorMailer implements ITwoFactorMailer {
+  private readonly logger = new Logger(BrevoApiTwoFactorMailer.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly http: HttpService,
+    private readonly config: ConfigService,
+  ) {}
 
   async sendLoginCode(toEmail: string, code: string): Promise<void> {
-    const from =
-      this.config.get<string>('SMTP_FROM')?.trim() ??
-      this.config.get<string>('BREVO_SMTP_FROM')?.trim() ??
-      this.config.get<string>('MAIL_FROM')?.trim() ??
-      'admin@bloxblitz.com';
+    const apiKey = this.config.get<string>('BREVO_API_KEY')?.trim() ?? '';
+
+    const fromEmail =
+      this.config.get<string>('MAIL_FROM')?.trim() ?? 'admin@bloxblitz.com';
+
+    const brandName =
+      this.config.get<string>('MAIL_BRAND_NAME')?.trim() ?? 'BloxBlitz Admin';
 
     const subject =
       this.config.get<string>('TWO_FACTOR_EMAIL_SUBJECT')?.trim() ??
       'Your admin sign-in code';
-
-    const brandName =
-      this.config.get<string>('TWO_FACTOR_EMAIL_BRAND')?.trim() ??
-      this.config.get<string>('MAIL_BRAND_NAME')?.trim() ??
-      'BloxBlitz Admin';
 
     const ttlMs = Number(this.config.get('TWO_FACTOR_CODE_TTL_MS')) || 300_000;
     const minutesValid = Math.max(1, Math.round(ttlMs / 60_000));
@@ -155,37 +108,54 @@ export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
 
     const html = buildTwoFactorEmailHtml(code, brandName, minutesValid);
 
-    const pass =
-      this.config.get<string>('BREVO_SMTP_PASS')?.trim() ||
-      this.config.get<string>('SMTP_PASS')?.trim() ||
-      '';
-    const user =
-      this.config.get<string>('BREVO_SMTP_USER')?.trim() ||
-      this.config.get<string>('SMTP_USER')?.trim() ||
-      '';
-
-    if (!pass || !user) {
+    if (!apiKey) {
       this.logger.warn(
-        `BREVO_SMTP_USER / BREVO_SMTP_PASS (or SMTP_*) not set; 2FA code for ${toEmail} would be: ${code}`,
+        `BREVO_API_KEY not set; 2FA code for ${toEmail} would be: ${code}`,
       );
       return;
     }
 
-    const transportOpts = brevoSmtpTransportOptions(this.config);
-    const { host, port } = transportOpts;
+    this.logger.log(`Sending 2FA email via Brevo API to ${toEmail}`);
 
-    this.logger.log(`Sending 2FA email via Brevo SMTP ${host}:${port} to ${toEmail}`);
+    try {
+      const { data, status } = await firstValueFrom(
+        this.http.post<BrevoSendEmailResponse>(
+          BREVO_TRANSACTIONAL_EMAIL_URL,
+          {
+            sender: {
+              name: brandName,
+              email: fromEmail,
+            },
+            to: [{ email: toEmail }],
+            subject,
+            htmlContent: html,
+            textContent: text,
+          },
+          {
+            headers: {
+              'api-key': apiKey,
+              accept: 'application/json',
+              'content-type': 'application/json',
+            },
+            timeout: 30_000,
+          },
+        ),
+      );
 
-    const transporter = nodemailer.createTransport(transportOpts);
-
-    await transporter.sendMail({
-      from,
-      to: toEmail,
-      subject,
-      text,
-      html,
-    });
-
-    this.logger.log(`2FA email sent to ${toEmail}`);
+      this.logger.log(
+        `2FA email sent to ${toEmail} (HTTP ${status}, messageId=${data?.messageId ?? 'n/a'})`,
+      );
+    } catch (err) {
+      const ax = err as AxiosError<{ message?: string; code?: string }>;
+      const detail =
+        ax.response?.data != null
+          ? JSON.stringify(ax.response.data)
+          : ax.message;
+      this.logger.error(
+        `Failed to send 2FA email to ${toEmail}: ${detail}`,
+        ax.stack,
+      );
+      throw err;
+    }
   }
 }
