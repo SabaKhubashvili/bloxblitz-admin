@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import type { ITwoFactorMailer } from '../domain/two-factor-mailer';
+
+/** Brevo (Sendinblue) relay — use SMTP key from https://app.brevo.com/settings/keys/smtp */
+const BREVO_DEFAULT_HOST = 'smtp-relay.brevo.com';
 
 function escapeHtml(s: string): string {
   return s
@@ -71,6 +75,57 @@ function buildTwoFactorEmailHtml(
 </html>`;
 }
 
+/**
+ * Build Nodemailer options for Brevo SMTP (TLS).
+ * - Port 587: STARTTLS (secure: false, requireTLS: true)
+ * - Port 465: implicit TLS (secure: true)
+ * Prefers BREVO_SMTP_*; falls back to legacy SMTP_* for local/dev.
+ */
+function brevoSmtpTransportOptions(config: ConfigService): SMTPTransport.Options {
+  const host =
+    config.get<string>('BREVO_SMTP_HOST')?.trim() ||
+    config.get<string>('SMTP_HOST')?.trim() ||
+    BREVO_DEFAULT_HOST;
+
+  const portRaw =
+    config.get<string>('BREVO_SMTP_PORT')?.trim() ||
+    config.get<string>('SMTP_PORT')?.trim();
+  const port = portRaw ? Number(portRaw) : 587;
+
+  const user =
+    config.get<string>('BREVO_SMTP_USER')?.trim() ||
+    config.get<string>('SMTP_USER')?.trim() ||
+    '';
+  const pass =
+    config.get<string>('BREVO_SMTP_PASS')?.trim() ||
+    config.get<string>('SMTP_PASS')?.trim() ||
+    '';
+
+  const secureExplicit = config.get<string>('BREVO_SMTP_SECURE') ?? config.get<string>('SMTP_SECURE');
+  const secure =
+    secureExplicit === 'true' || (!secureExplicit && port === 465);
+
+  const connectionTimeout =
+    Number(config.get('SMTP_CONNECTION_TIMEOUT_MS')) || 15_000;
+  const socketTimeout =
+    Number(config.get('SMTP_SOCKET_TIMEOUT_MS')) || 30_000;
+
+  return {
+    host,
+    port,
+    secure,
+    auth: user ? { user, pass } : undefined,
+    requireTLS: !secure && port === 587,
+    tls: {
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.2',
+    },
+    connectionTimeout,
+    greetingTimeout: connectionTimeout,
+    socketTimeout,
+  };
+}
+
 @Injectable()
 export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
   private readonly logger = new Logger(NodemailerTwoFactorMailer.name);
@@ -78,11 +133,11 @@ export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
   constructor(private readonly config: ConfigService) {}
 
   async sendLoginCode(toEmail: string, code: string): Promise<void> {
-    const host = this.config.get<string>('SMTP_HOST')?.trim();
     const from =
       this.config.get<string>('SMTP_FROM')?.trim() ??
+      this.config.get<string>('BREVO_SMTP_FROM')?.trim() ??
       this.config.get<string>('MAIL_FROM')?.trim() ??
-      'noreply@localhost';
+      'admin@bloxblitz.com';
 
     const subject =
       this.config.get<string>('TWO_FACTOR_EMAIL_SUBJECT')?.trim() ??
@@ -100,36 +155,28 @@ export class NodemailerTwoFactorMailer implements ITwoFactorMailer {
 
     const html = buildTwoFactorEmailHtml(code, brandName, minutesValid);
 
-    if (!host) {
+    const pass =
+      this.config.get<string>('BREVO_SMTP_PASS')?.trim() ||
+      this.config.get<string>('SMTP_PASS')?.trim() ||
+      '';
+    const user =
+      this.config.get<string>('BREVO_SMTP_USER')?.trim() ||
+      this.config.get<string>('SMTP_USER')?.trim() ||
+      '';
+
+    if (!pass || !user) {
       this.logger.warn(
-        `SMTP_HOST is not set; 2FA code for ${toEmail} would be: ${code}`,
+        `BREVO_SMTP_USER / BREVO_SMTP_PASS (or SMTP_*) not set; 2FA code for ${toEmail} would be: ${code}`,
       );
       return;
     }
-    this.logger.log(
-      `Sending 2FA email via SMTP ${host}:${Number(this.config.get('SMTP_PORT')) || 587} to ${toEmail}`,
-    );
 
-    const port = Number(this.config.get('SMTP_PORT')) || 587;
-    const secure =
-      this.config.get<string>('SMTP_SECURE') === 'true' || port === 465;
-    const user = this.config.get<string>('SMTP_USER') ?? '';
-    const pass = this.config.get<string>('SMTP_PASS') ?? '';
+    const transportOpts = brevoSmtpTransportOptions(this.config);
+    const { host, port } = transportOpts;
 
-    const connectionTimeout =
-      Number(this.config.get('SMTP_CONNECTION_TIMEOUT_MS')) || 15_000;
-    const socketTimeout =
-      Number(this.config.get('SMTP_SOCKET_TIMEOUT_MS')) || 30_000;
+    this.logger.log(`Sending 2FA email via Brevo SMTP ${host}:${port} to ${toEmail}`);
 
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure,
-      auth: user ? { user, pass } : undefined,
-      connectionTimeout,
-      greetingTimeout: connectionTimeout,
-      socketTimeout,
-    });
+    const transporter = nodemailer.createTransport(transportOpts);
 
     await transporter.sendMail({
       from,
