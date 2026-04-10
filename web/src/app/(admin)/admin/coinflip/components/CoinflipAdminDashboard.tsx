@@ -3,6 +3,7 @@
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import { cn } from "./cn";
 import { ActiveGamesSection } from "../sections/ActiveGamesSection";
+import { BotsSection } from "../sections/BotsSection";
 import { ConfigurationSection } from "../sections/ConfigurationSection";
 import { DebugSection } from "../sections/DebugSection";
 import { DisputesSection } from "../sections/DisputesSection";
@@ -22,6 +23,7 @@ const NAV = [
   { href: "#active", label: "Active" },
   { href: "#history", label: "History" },
   { href: "#config", label: "Config" },
+  { href: "#bots", label: "Bots" },
   { href: "#fraud-users", label: "Fraud users" },
   { href: "#fraud-games", label: "Fraud games" },
   { href: "#risk", label: "Risk" },
@@ -92,6 +94,7 @@ export function CoinflipAdminDashboard() {
           <ActiveGamesSection />
           <HistorySection />
           <ConfigurationSection />
+          <BotsSection />
           <SuspiciousUsersSection />
           <PlayerStatsSection />
           <ManualControlsSection />

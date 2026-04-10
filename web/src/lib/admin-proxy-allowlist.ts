@@ -12,6 +12,8 @@ const ALLOWED_PREFIXES = [
   "admin/coinflip",
   "admin/mines",
   "admin/dice",
+  "admin/roulette",
+  "admin/towers",
   "admin/races",
   "admin/cases",
   "admin/pets",

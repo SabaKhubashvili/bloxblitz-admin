@@ -3,6 +3,9 @@
  */
 export type RollingAnalyticsPreset = '24h' | '7d' | '30d';
 
+/** Presets including all-time stats (used by Towers admin; charts may use a shorter window). */
+export type RollingAnalyticsPresetWithAll = RollingAnalyticsPreset | 'all';
+
 export const MS_HOUR = 60 * 60 * 1000;
 export const MS_DAY = 24 * MS_HOUR;
 
@@ -18,6 +21,16 @@ export function rollingWindowBounds(
         ? 7 * MS_DAY
         : 30 * MS_DAY;
   return { from: new Date(to.getTime() - ms), to };
+}
+
+export function rollingWindowBoundsWithAll(
+  preset: RollingAnalyticsPresetWithAll,
+  now: Date,
+): { from: Date; to: Date } {
+  if (preset === 'all') {
+    return { from: new Date(0), to: new Date(now.getTime()) };
+  }
+  return rollingWindowBounds(preset, now);
 }
 
 /** Truncate to the start of the hour in UTC. */

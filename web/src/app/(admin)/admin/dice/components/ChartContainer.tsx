@@ -71,6 +71,8 @@ export function ChartContainer({
           : kind === "line" || kind === "area"
             ? kind
             : "area";
+  const lineLike = chartType === "line" || chartType === "area";
+
   const merged: ApexOptions = {
     ...DARK,
     ...options,
@@ -80,6 +82,20 @@ export function ChartContainer({
       height,
       type: chartType,
     },
+    ...(lineLike
+      ? {
+          stroke: {
+            show: true,
+            /** Slightly thicker than typical `width: 2` so lines read clearly on dark UI. */
+            width: 3,
+            curve: "smooth",
+            lineCap: "round",
+            ...(typeof options.stroke === "object" && options.stroke
+              ? options.stroke
+              : {}),
+          },
+        }
+      : {}),
   };
   return (
     <PanelCard title={title} subtitle={subtitle} flush headerRight={headerRight}>

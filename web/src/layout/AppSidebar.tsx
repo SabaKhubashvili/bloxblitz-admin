@@ -62,6 +62,8 @@ const navItems: NavItem[] = [
       { name: "Coinflip admin", path: "/admin/coinflip" },
       { name: "Mines admin", path: "/admin/mines" },
       { name: "Dice admin", path: "/admin/dice" },
+      { name: "Roulette admin", path: "/admin/roulette" },
+      { name: "Towers admin", path: "/admin/towers" },
     ],
   },
   {

@@ -21,11 +21,16 @@ import { RacesModule } from './races/races.module';
 import { RewardCasesModule } from './reward-cases/reward-cases.module';
 import { RewardCaseKeysAdminModule } from './reward-case-keys/reward-case-keys-admin.module';
 import { CoinflipBannedUserIdsModule } from './coinflip-banned-user-ids/coinflip-banned-user-ids.module';
+import { CoinflipBotsModule } from './coinflip-bots/coinflip-bots.module';
 import { CasesOverviewModule } from './cases-overview/cases-overview.module';
 import { PetsModule } from './pets/pets.module';
 import { CrashControlRoomModule } from './crash-control-room/crash-control-room.module';
 import { CrashChainAdminModule } from './crash-chain-admin/crash-chain-admin.module';
 import { CrashPlayersModule } from './crash-players/crash-players.module';
+import { RouletteAdminModule } from './roulette-admin/roulette-admin.module';
+import { RouletteRestrictionModule } from './roulette-restriction/roulette-restriction.module';
+import { TowersAdminModule } from './towers-admin/towers-admin.module';
+import { TowersRestrictionModule } from './towers-restriction/towers-restriction.module';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
@@ -129,12 +134,17 @@ const envFilePath =
     PetsModule,
     CasesChartsModule,
     CoinflipTrackingModule,
+    CoinflipBotsModule,
     MinesOverviewModule,
     MinesModerationModule,
     MinesSystemControlModule,
     CoinflipFraudModule,
     CoinflipPlayersModule,
     DiceAnalyticsModule,
+    RouletteAdminModule,
+    RouletteRestrictionModule,
+    TowersAdminModule,
+    TowersRestrictionModule,
     RacesModule,
     RewardCasesModule,
     RewardCaseKeysAdminModule,
