@@ -7,7 +7,6 @@ import { useMemo, useState } from "react";
 
 const GAME_OPTIONS = [
   { value: "crash", label: "Crash" },
-  { value: "jackpot", label: "Jackpot" },
   { value: "mines", label: "Mines" },
   { value: "dice", label: "Dice" },
   { value: "coinflip", label: "Coinflip" },

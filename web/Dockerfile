@@ -13,7 +13,9 @@ ARG NODE_IMAGE=node:22-bookworm-slim
 # -----------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS dev
 
-RUN apt-get update -y \
+
+
+RUN apt-get update -y   \
     && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
