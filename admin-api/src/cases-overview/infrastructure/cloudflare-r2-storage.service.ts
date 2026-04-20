@@ -30,10 +30,6 @@ export class CloudflareR2StorageService
     const secretAccessKey = this.config
       .get<string>('R2_SECRET_ACCESS_KEY')
       ?.trim();
-    console.log('bucket', bucket);
-    console.log('endpoint', endpoint);
-    console.log('accessKeyId', accessKeyId);
-    console.log('secretAccessKey', secretAccessKey);  
 
     if (
       !endpoint ||
