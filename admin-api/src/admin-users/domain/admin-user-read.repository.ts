@@ -9,6 +9,8 @@ export interface AdminUserListPage {
   totalUsers: number;
 }
 
+
+
 export interface IAdminUserReadRepository {
   count(criteria: AdminUserCountCriteria): Promise<number>;
   findPage(criteria: AdminUserListCriteria): Promise<AdminUserListPage>;
